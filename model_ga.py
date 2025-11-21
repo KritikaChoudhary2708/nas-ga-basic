@@ -63,16 +63,16 @@ class GeneticAlgorithm:
     def initialize_population(self):
         self.population = [Architecture() for _ in range(self.population_size)]
     
-    def evaluate_fitness(self, architecture, train_loader, val_loader, device, epochs=100):
+    def evaluate_fitness(self, architecture, train_loader, val_loader, device, epochs=25): #original epoch size was 100 but system was running slow so reduced it to 25
         """Train and evaluate a single architecture"""
         try:
             model = CNN(architecture.genes).to(device)
             criterion = nn.CrossEntropyLoss()
-            optimizer = AdamW(model.parameters(), lr=0.001)
+            optimizer = AdamW(model.parameters(), lr=0.002) #original learning rate was 0.001 but system was running slow so increased it to 0.002
             
             # Quick training
             best_acc = 0
-            patience = 10
+            patience = 5 #original patience was 10 but system was running slow so reduced it to 5
             step = 1
             best_epoch = 1
             for epoch in range(1, epochs+1):
@@ -107,17 +107,30 @@ class GeneticAlgorithm:
                 if step >= patience:
                     break
             
-            # Calculate model complexity penalty
-            num_params = sum(p.numel() for p in model.parameters())
-            complexity_penalty = num_params / 1e6  # Normalize
+            conv_params = 0
+            fc_params = 0
+            
+            for name, param in model.named_parameters():
+                if 'features' in name:
+                    conv_params += param.numel()
+                elif 'classifier' in name:
+                    fc_params += param.numel()
+            
+            conv_penalty = conv_params / 1e6
+            fc_penalty = fc_params / 1e6
+            
+            # Weights justified by computational cost (Conv > FC)
+            weight_conv = 0.015
+            weight_fc = 0.005
+            
+            complexity_penalty = weight_conv * conv_penalty + weight_fc * fc_penalty
 
             del model, inputs, outputs, labels
             torch.cuda.empty_cache()
             
-            # Fitness = accuracy - lambda * complexity
             architecture.accuracy = best_acc
             architecture.best_epoch = best_epoch
-            architecture.fitness = best_acc - 0.01 * complexity_penalty
+            architecture.fitness = best_acc - complexity_penalty
             
             return architecture.fitness
             
@@ -128,14 +141,32 @@ class GeneticAlgorithm:
             return 0
     
     def selection(self):
-        """Tournament selection"""
-        tournament_size = 3
+        """Roulette-Wheel selection based on relative fitness"""
         selected = []
         
+        fitness_values = [arch.fitness for arch in self.population]
+        min_fitness = min(fitness_values)
+        
+        if min_fitness < 0:
+            shifted_fitness = [f - min_fitness + 1e-6 for f in fitness_values]
+        else:
+            shifted_fitness = [f + 1e-6 for f in fitness_values]
+        
+        total_fitness = sum(shifted_fitness)
+        probabilities = [f / total_fitness for f in shifted_fitness]
+        
+        cumulative_probs = []
+        total_prob = 0
+        for prob in probabilities:
+            total_prob += prob
+            cumulative_probs.append(total_prob)
+        
         for _ in range(self.population_size):
-            tournament = random.sample(self.population, tournament_size)
-            winner = max(tournament, key=lambda x: x.fitness)
-            selected.append(winner)
+            r = random.random()
+            for i, prob_total in enumerate(cumulative_probs):
+                if r <= prob_total:
+                    selected.append(self.population[i])
+                    break
         
         return selected
     
@@ -240,7 +271,7 @@ class GeneticAlgorithm:
             print(f"Best overall: {self.best_architecture}", flush=True)
             
             # Selection
-            print(f"\nPerforming tournament selection of total population: {self.population_size} ...", flush=True)
+            print(f"\nPerforming roulette-wheel selection of total population: {self.population_size} ...", flush=True)
             selected = self.selection()
             
             # Crossover and Mutation
