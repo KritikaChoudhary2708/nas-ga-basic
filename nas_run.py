@@ -29,7 +29,7 @@ transform = T.Compose([
 trainset = CIFAR10(root='./data', train=True, download=True, transform=transform)
 valset = CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-# Use only 3000 samples for faster NAS
+
 train_subset = Subset(trainset, range(3000)) #original train set size was 50000 but system was running slow so reduced it to 3000
 val_subset = Subset(valset, range(500)) #original val set size was 10000 but system was running slow so reduced it to 500
 
